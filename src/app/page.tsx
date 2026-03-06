@@ -1,65 +1,176 @@
-import Image from "next/image";
+import { AdminLayout } from "@/components/admin-layout";
+import { DashboardCharts } from "@/components/dashboard-charts";
+import { FunnyWordBubbles } from "@/components/funny-word-bubbles";
+import {
+  PageHeader,
+  SectionTitle,
+  StatusBadge,
+  SurfaceCard,
+} from "@/components/editorial-ui";
+import { formatUtcMonthDay } from "@/lib/date";
+import { extractFunnyWords } from "@/lib/funny-words";
+import { createSupabaseServerClient } from "@/lib/supabase-server";
 
-export default function Home() {
+async function getStats() {
+  const supabase = await createSupabaseServerClient();
+
+  const [
+    { count: totalProfiles },
+    { count: totalImages },
+    { count: totalCaptions },
+    { data: recentCaptions },
+    { data: recentImages },
+    { data: mostCaptionedImages },
+    { data: allCaptions },
+  ] = await Promise.all([
+    supabase.from("profiles").select("*", { count: "exact", head: true }),
+    supabase.from("images").select("*", { count: "exact", head: true }),
+    supabase.from("captions").select("*", { count: "exact", head: true }),
+    supabase
+      .from("captions")
+      .select("created_datetime_utc")
+      .order("created_datetime_utc", { ascending: false })
+      .limit(50),
+    supabase
+      .from("images")
+      .select("created_datetime_utc")
+      .order("created_datetime_utc", { ascending: false })
+      .limit(50),
+    supabase
+      .from("captions")
+      .select("image_id, images(url, image_description)")
+      .not("image_id", "is", null)
+      .limit(500),
+    supabase
+      .from("captions")
+      .select("content")
+      .order("created_datetime_utc", { ascending: false })
+      .limit(1000),
+  ]);
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const groupByDate = (items: any[], field: string) => {
+    const groups: Record<string, number> = {};
+
+    items.forEach((item) => {
+      const date = formatUtcMonthDay(item[field]);
+      groups[date] = (groups[date] || 0) + 1;
+    });
+
+    return groups;
+  };
+
+  const captionsByDate = groupByDate(recentCaptions || [], "created_datetime_utc");
+  const imagesByDate = groupByDate(recentImages || [], "created_datetime_utc");
+  const allDates = [
+    ...new Set([...Object.keys(captionsByDate), ...Object.keys(imagesByDate)]),
+  ]
+    .slice(0, 10)
+    .reverse();
+
+  const activityData = allDates.map((date) => ({
+    date,
+    captions: captionsByDate[date] || 0,
+    images: imagesByDate[date] || 0,
+  }));
+
+  const imageCounts: Record<string, { url: string; desc: string; count: number }> = {};
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  mostCaptionedImages?.forEach((caption: any) => {
+    const imageId = caption.image_id;
+    if (!imageCounts[imageId]) {
+      imageCounts[imageId] = {
+        url: caption.images?.url || "",
+        desc: caption.images?.image_description || "",
+        count: 0,
+      };
+    }
+
+    imageCounts[imageId].count++;
+  });
+
+  const topImages = Object.values(imageCounts)
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 4);
+
+  const funnyWords = extractFunnyWords(
+    (allCaptions || []).map((c) => c.content || "")
+  );
+
+  return {
+    totalProfiles: totalProfiles || 0,
+    totalImages: totalImages || 0,
+    totalCaptions: totalCaptions || 0,
+    activityData,
+    topImages,
+    funnyWords,
+  };
+}
+
+export default async function DashboardPage() {
+  const stats = await getStats();
+
   return (
-    <div className="flex min-h-screen items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex min-h-screen w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
+    <AdminLayout>
+      <div className="space-y-8">
+        <PageHeader title="Dashboard" />
+
+        <div className="space-y-4">
+          <SectionTitle
+            label="Captions"
+            title="Funny word bubbles"
+            detail="Most repeated interesting words across the latest 1,000 captions."
+          />
+          <FunnyWordBubbles words={stats.funnyWords} />
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
+
+        <div className="grid gap-6 xl:grid-cols-[1.35fr_0.95fr]">
+          <div className="space-y-4">
+            <SectionTitle
+              label="Activity"
+              title="Recent volume"
+              detail="Latest uploads and caption activity."
             />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+            <DashboardCharts activityData={stats.activityData} />
+          </div>
+
+          <div>
+            <SurfaceCard className="rounded-[1.5rem] px-6 py-6">
+              <SectionTitle label="Images" title="Most captioned" />
+              <div className="mt-5 space-y-3">
+                {stats.topImages.length === 0 ? (
+                  <p className="body-copy text-sm">No data yet.</p>
+                ) : (
+                  stats.topImages.map((image, index) => (
+                    <div
+                      key={`${image.url}-${index}`}
+                      className="soft-panel flex items-center gap-3 rounded-[1.2rem] px-3 py-3"
+                    >
+                      {image.url ? (
+                        // Remote preview URLs come from stored records, so plain img avoids allowlist churn.
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          src={image.url}
+                          alt=""
+                          className="h-14 w-14 rounded-[1rem] object-cover"
+                        />
+                      ) : (
+                        <div className="h-14 w-14 rounded-[1rem] bg-white/50" />
+                      )}
+                      <div className="min-w-0 flex-1">
+                        <p className="line-clamp-2 text-sm leading-6 text-[var(--ink)]">
+                          {image.desc || "Untitled image"}
+                        </p>
+                      </div>
+                      <StatusBadge>{image.count}</StatusBadge>
+                    </div>
+                  ))
+                )}
+              </div>
+            </SurfaceCard>
+          </div>
         </div>
-      </main>
-    </div>
+      </div>
+    </AdminLayout>
   );
 }
